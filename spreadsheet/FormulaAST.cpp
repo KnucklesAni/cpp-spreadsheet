@@ -10,6 +10,12 @@
 #include <optional>
 #include <sstream>
 
+template<class... Ts>
+struct overloaded : Ts... { using Ts::operator()...; };
+
+template<class... Ts>
+overloaded(Ts...) -> overloaded<Ts...>;
+
 namespace ASTImpl {
 
 enum ExprPrecedence {
@@ -72,7 +78,17 @@ public:
     virtual ~Expr() = default;
     virtual void Print(std::ostream& out) const = 0;
     virtual void DoPrintFormula(std::ostream& out, ExprPrecedence precedence) const = 0;
-    virtual double Evaluate(/*добавьте сюда нужные аргументы*/ args) const = 0;
+    double Evaluate(const SheetInterface& sheet) const {
+        double result = EvaluateImpl(sheet);
+        if (!std::isfinite(result)) {
+            // Мы можем получить эту ошибку не только при делении на нуль,
+            // но FormulaError поддерживает только это ошибку.
+            throw FormulaError(FormulaError::Category::Div0);
+        }
+        return result;
+    }
+    virtual double EvaluateImpl(const SheetInterface& sheet) const = 0;
+    virtual void GetReferencedCells(std::set<Position>& result) const = 0;
 
     // higher is tighter
     virtual ExprPrecedence GetPrecedence() const = 0;
@@ -142,8 +158,26 @@ public:
         }
     }
 
-    double Evaluate(/*добавьте нужные аргументы*/) const override {
-			// Скопируйте ваше решение из предыдущих уроков.
+    double EvaluateImpl(const SheetInterface& sheet) const override {
+        switch (type_) {
+            case Add:
+                return lhs_->EvaluateImpl(sheet) + rhs_->EvaluateImpl(sheet);
+            case Subtract:
+                return lhs_->EvaluateImpl(sheet) - rhs_->EvaluateImpl(sheet);
+            case Multiply:
+                return lhs_->EvaluateImpl(sheet) * rhs_->EvaluateImpl(sheet);
+            case Divide:
+                return lhs_->EvaluateImpl(sheet) / rhs_->EvaluateImpl(sheet);
+            default:
+                // have to do this because VC++ has a buggy warning
+                assert(false);
+                return static_cast<ExprPrecedence>(INT_MAX);
+        }
+    }
+
+    void GetReferencedCells(std::set<Position>& result) const override {
+        lhs_->GetReferencedCells(result);
+        rhs_->GetReferencedCells(result);
     }
 
 private:
@@ -180,8 +214,21 @@ public:
         return EP_UNARY;
     }
 
-    double Evaluate(/*добавьте нужные аргументы*/ args) const override {
-        // Скопируйте ваше решение из предыдущих уроков.
+    double EvaluateImpl(const SheetInterface& sheet) const override {
+        switch (type_) {
+            case UnaryPlus:
+                return operand_->EvaluateImpl(sheet);
+            case UnaryMinus:
+                return -operand_->EvaluateImpl(sheet);
+            default:
+                // have to do this because VC++ has a buggy warning
+                assert(false);
+                return static_cast<ExprPrecedence>(INT_MAX);
+        }
+    }
+
+    void GetReferencedCells(std::set<Position>& result) const override {
+        operand_->GetReferencedCells(result);
     }
 
 private:
@@ -211,8 +258,39 @@ public:
         return EP_ATOM;
     }
 
-    double Evaluate(/*добавьте нужные аргументы*/ args) const override {
-        // реализуйте метод.
+    double EvaluateImpl(const SheetInterface& sheet) const override {
+        if (!cell_->IsValid()) {
+            throw FormulaError(FormulaError::Category::Ref);
+        }
+        auto* cell = sheet.GetCell(*cell_);
+        if (!cell) {
+            return 0.0;
+            //throw FormulaError(FormulaError::Category::Ref);
+        }
+        auto value = cell->GetValue();
+        return std::visit(overloaded{
+            [](double value) -> double { return value; },
+            [](FormulaError&& error) -> double { throw error; },
+            [](std::string&& string) -> double {
+                if (string.empty()) {
+                    return 0.0;
+                }
+                try {
+                    return std::stod(string);
+                } catch (const std::invalid_argument&) {
+                    throw FormulaError(FormulaError::Category::Value);
+                } catch (const std::out_of_range&) {
+                    throw FormulaError(FormulaError::Category::Value);
+                }
+            },
+        },
+        std::move(value));
+    }
+
+    void GetReferencedCells(std::set<Position>& result) const override {
+        if (cell_->IsValid()) {
+            result.insert(*cell_);
+        }
     }
 
 private:
@@ -237,8 +315,11 @@ public:
         return EP_ATOM;
     }
 
-    double Evaluate(/*добавьте нужные аргументы*/ args) const override {
+    double EvaluateImpl(const SheetInterface& sheet) const override {
         return value_;
+    }
+
+    void GetReferencedCells(std::set<Position>&) const override {
     }
 
 private:
@@ -391,8 +472,17 @@ void FormulaAST::PrintFormula(std::ostream& out) const {
     root_expr_->PrintFormula(out, ASTImpl::EP_ATOM);
 }
 
-double FormulaAST::Execute(/*добавьте нужные аргументы*/ args) const {
-    return root_expr_->Evaluate(/*добавьте нужные аргументы*/ args);
+double FormulaAST::Execute(const SheetInterface& sheet) const {
+    return root_expr_->Evaluate(sheet);
+}
+
+std::vector<Position> FormulaAST::GetReferencedCells() const {
+    std::set<Position> result;
+    root_expr_->GetReferencedCells(result);
+    return {begin(result), end(result)};
+//    std::vector<Position> qq{begin(result), end(result)};
+//std::cerr << "qq|:" << qq.size() << "\n";
+//    return qq;
 }
 
 FormulaAST::FormulaAST(std::unique_ptr<ASTImpl::Expr> root_expr, std::forward_list<Position> cells)

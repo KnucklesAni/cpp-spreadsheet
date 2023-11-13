@@ -26,6 +26,15 @@ struct Position {
     static const Position NONE;
 };
 
+namespace std {
+    template <> struct hash<Position>
+    {
+        size_t operator()(const Position& pos) const {
+            return hash<int>()((pos.row << 16) + pos.col); 
+        }
+    };
+}
+
 struct Size {
     int rows = 0;
     int cols = 0;
@@ -96,7 +105,7 @@ public:
     // Возвращает список ячеек, которые непосредственно задействованы в данной
     // формуле. Список отсортирован по возрастанию и не содержит повторяющихся
     // ячеек. В случае текстовой ячейки список пуст.
-    virtual std::vector<Position> GetReferencedCells() const = 0;
+    virtual const std::vector<Position>& GetReferencedCells() const = 0;
 };
 
 inline constexpr char FORMULA_SIGN = '=';

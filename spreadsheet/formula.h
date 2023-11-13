@@ -33,7 +33,7 @@ public:
     // Возвращает список ячеек, которые непосредственно задействованы в вычислении
     // формулы. Список отсортирован по возрастанию и не содержит повторяющихся
     // ячеек.
-    virtual std::vector<Position> GetReferencedCells() const = 0;
+    virtual const std::vector<Position>& GetReferencedCells() const = 0;
 };
 
 // Парсит переданное выражение и возвращает объект формулы.
